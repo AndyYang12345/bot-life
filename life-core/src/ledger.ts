@@ -17,7 +17,7 @@ export interface Job {
 export interface Outbound { id: string; part: number; payload: { text?: string; meme?: {id:string;hash:string} }; status: string }
 export interface BlobRef { hash: string; path: string; bytes: number; mime: string; role: string }
 export interface MediaHistory { eventId: string; path: string; hash: string; occurredAt: string; role: string }
-export interface ConversationContext { messages: { eventId: string; actor: string; body: string; occurredAt: string }[]; botReplies:{body:string;at:string}[]; lastSpokenAt?: string }
+export interface ConversationContext { messages: { eventId: string; actor: string; body: string; occurredAt: string }[]; botReplies:{body:string;at:string;replyTo:string}[]; lastSpokenAt?: string }
 export class LeaseLost extends Error { constructor() { super('lease_lost'); } }
 
 /** No dependency on QQ, OneBot, DSH, model providers or persona. */
@@ -252,11 +252,11 @@ export class Ledger {
     const last = await this.pool.query(`SELECT max(e.recorded_at) AS at FROM life_events e
       JOIN life_events source ON source.id=e.cause JOIN life_events anchor ON anchor.id=$1 AND anchor.conversation=$2
       WHERE e.conversation=$2 AND e.kind='outbound.confirmed' AND source.seq<anchor.seq`,[job.id,job.conversation]);
-    const replies=await this.pool.query(`SELECT left(o.payload->>'text',800) AS body,o.updated_at AS at FROM life_outbox o JOIN life_events e ON e.id=o.job_id
+    const replies=await this.pool.query(`SELECT left(o.payload->>'text',800) AS body,o.updated_at AS at,e.actor AS "replyTo" FROM life_outbox o JOIN life_events e ON e.id=o.job_id
       JOIN life_events anchor ON anchor.id=$1 AND anchor.conversation=$2 WHERE e.conversation=$2 AND e.seq<anchor.seq AND o.status='confirmed'
       AND o.payload ? 'text' AND e.seq>COALESCE((SELECT max(source.seq) FROM life_events reset JOIN life_events source ON source.id=reset.cause
         WHERE reset.conversation=$2 AND reset.kind='conversation.reset' AND source.seq<anchor.seq),0) ORDER BY e.seq DESC,o.part DESC LIMIT 2`,[job.id,job.conversation]);
-    return { messages: rows.rows.reverse().map(row=>({...row,occurredAt:new Date(row.occurredAt).toISOString()})),botReplies:replies.rows.reverse().map(r=>({body:r.body,at:new Date(r.at).toISOString()})),
+    return { messages: rows.rows.reverse().map(row=>({...row,occurredAt:new Date(row.occurredAt).toISOString()})),botReplies:replies.rows.reverse().map(r=>({body:r.body,at:new Date(r.at).toISOString(),replyTo:r.replyTo})),
       lastSpokenAt: last.rows[0]?.at ? new Date(last.rows[0].at).toISOString() : undefined };
   }
   async derived(job: Job, kind: string): Promise<Record<string,unknown> | undefined> {

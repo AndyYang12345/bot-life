@@ -3,20 +3,26 @@ import {mkdtempSync,readFileSync,rmSync,statSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
-import {aliasSignal,LocalEmbedding,validateRecall,writeAliasSnapshot} from '../src/attention-recall.js';
-import {immediateDecision} from '../src/attention.js';
+import {aliasSignal,continuationSignal,LocalEmbedding,validateRecall,writeAliasSnapshot} from '../src/attention-recall.js';
+import {immediateDecision,attentionJudgeLimit} from '../src/attention.js';
 import type {MessageEvent} from '../src/types.js';
 import type {Normalized} from '../src/inbound.js';
 const event=(text:string):MessageEvent=>({post_type:'message',message_type:'group',self_id:'bot',user_id:'u',group_id:'g',message_id:'m',time:1,message:[{type:'text',data:{text}}]});
 const normalized:Normalized={body:'',images:0,quotes:0,mediaFailures:0,forwards:0,forwardNodes:0,videos:0,truncated:false,media:[],references:[],links:[]};
 describe('local attention recall',()=>{
   it('distinguishes vocatives from discussing the bot and ignores forwarded or other-recipient names',()=>{
-    for(const text of ['小鲸鲸','小鲸鲸，在吗？','喂，小鲸鲸你怎么看','小鲸鲸帮我看看'])expect(aliasSignal(event(text),['小鲸鲸']).kind).toBe('call');
+    for(const text of ['小鲸鲸','小鲸鲸，在吗？','喂，小鲸鲸你怎么看','小鲸鲸帮我看看','看视频小鲸鲸','总结一下，小鲸鲸'])expect(aliasSignal(event(text),['小鲸鲸']).kind).toBe('call');
     for(const text of ['小鲸鲸刚才说了什么','你觉得小鲸鲸怎么样','小鲸鲸，刚才又说错了'])expect(aliasSignal(event(text),['小鲸鲸']).kind).toBe('mention');
     for(const text of ['“小鲸鲸，在吗”','小鲸鲸，不要回复'])expect(aliasSignal(event(text),['小鲸鲸']).kind).toBe('none');
     expect(aliasSignal({...event('小鲸鲸，在吗'),message:[{type:'at',data:{qq:'other'}},{type:'text',data:{text:'小鲸鲸，在吗'}}]},['小鲸鲸']).kind).toBe('none');
     expect(aliasSignal({...event(''),message:[{type:'forward',data:{content:'小鲸鲸，在吗'}}]},['小鲸鲸']).kind).toBe('none');
     expect(aliasSignal(event('a.*b'),['.*']).kind).toBe('none');expect(aliasSignal(event('chatbot工具'),['chat']).kind).toBe('none');
+  });
+  it('recognizes a recent same-person followup and reserves shared capacity for direct replies',()=>{
+    expect(continuationSignal(event('我叫你看视频你怎么不看'),[{replyTo:'u'}],8000)).toBe(true);
+    expect(continuationSignal(event('我叫你看视频你怎么不看'),[{replyTo:'other'}],8000)).toBe(false);
+    expect(continuationSignal(event('你怎么不看'),[{replyTo:'u'}],100000)).toBe(false);
+    expect(attentionJudgeLimit(40)).toBe(32);expect(attentionJudgeLimit(1)).toBe(0);
   });
   it('bypasses the judge for clear calls but only wakes the judge for mentions or semantic matches',()=>{
     const e=event('小鲸鲸，在吗'),last=new Date().toISOString();

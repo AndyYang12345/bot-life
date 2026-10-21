@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Install the workspace-local, loopback-only read-only monitor service."""
+import os
+import pathlib
+import shutil
+import subprocess
+
+root = pathlib.Path(__file__).resolve().parents[1]
+node = shutil.which('node')
+if not node:
+    raise SystemExit('Node.js required')
+folder = pathlib.Path.home()/'.config/systemd/user'
+folder.mkdir(parents=True, exist_ok=True)
+unit = folder/'napcat-monitor.service'
+unit.write_text('[Unit]\nDescription=Naijing local conversation monitor\nAfter=napcat-onebot.service\n\n[Service]\nType=simple\n'
+                'ExecStart='+str(root/'scripts/run-monitor')+'\nEnvironment=ONEBOT_NODE_BIN='+node+'\nWorkingDirectory='+str(root)+'\n'
+                'Restart=on-failure\nRestartSec=5\nUMask=0077\n\n[Install]\nWantedBy=default.target\n')
+env = dict(os.environ, XDG_RUNTIME_DIR='/run/user/'+str(os.getuid()), DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/'+str(os.getuid())+'/bus')
+subprocess.run(['systemctl','--user','daemon-reload'],env=env,check=True)
+subprocess.run(['systemctl','--user','enable','--now','napcat-monitor.service'],env=env,check=True)
+print('Local monitor installed: http://127.0.0.1:6100/')

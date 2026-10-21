@@ -10,7 +10,7 @@ import type {MessageEvent} from './types.js';
 
 export interface EmbeddingConfig {enabled:boolean;python:string;server:string;cacheDir:string;device?:'cpu'|'cuda';threshold?:number;margin?:number;contextThreshold?:number;timeoutMs?:number}
 export interface RecallConfig {enabled:boolean;learning?:boolean;maxPerHour?:number;embedding?:EmbeddingConfig}
-export interface RecallSignal {kind:'call'|'mention'|'semantic'|'none';alias?:string;positive?:number;negative?:number;context?:number;elapsedMs?:number;error?:string}
+export interface RecallSignal {kind:'call'|'mention'|'semantic'|'followup'|'none';alias?:string;positive?:number;negative?:number;context?:number;elapsedMs?:number;error?:string}
 export function validateRecall(value:RecallConfig|undefined):void{
   if(value===undefined)return;
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['enabled','learning','maxPerHour','embedding'].includes(k))||typeof value.enabled!=='boolean'
@@ -32,12 +32,19 @@ export function aliasSignal(event:MessageEvent,aliases:readonly string[]):Recall
     const escaped=alias.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
     const vocative=new RegExp('^(?:(?:喂|嘿|诶|欸|请问)[,，!！、\\s]*)?'+escaped+'(?:[,，、:：!！?？\\s]+|(?:你|在吗|在不在|帮我|帮忙|能不能|可不可以|怎么看|怎么想|说句话|出来))');
     const thirdPerson=new RegExp(escaped+'[,，、:：!！?？\\s]*(?:刚才|昨天|今天|之前|上次|好像|居然|竟然|是不是|怎么又|说过|说了|的(?:回复|回答|功能))');
-    if((text===alias||vocative.test(text))&&!thirdPerson.test(text))return {kind:'call',alias};
+    const requestThenName=new RegExp('^(?:请|麻烦)?(?:看视频|看一下|看看|看图|帮我|帮忙|解释|总结|回答|说说|查一下|搜一下)[^。.!！?？]{0,90}?[,，、\\s]*'+escaped+'[呀啊呗吧吗?？!！。\\s]*$');
+    if((text===alias||vocative.test(text)||requestThenName.test(text))&&!thirdPerson.test(text))return {kind:'call',alias};
     // Substrings inside a Latin word are not addressing a short English alias.
     if(/^[a-z0-9_-]+$/.test(alias)&&!new RegExp('(?:^|[^a-z0-9_-])'+escaped+'(?:$|[^a-z0-9_-])').test(text))continue;
     return {kind:'mention',alias};
   }
   return {kind:'none'};
+}
+export function continuationSignal(event:MessageEvent,replies:readonly {replyTo:string}[],elapsedMs:number|undefined):boolean{
+  const text=textOf(event.message).normalize('NFKC');
+  return elapsedMs!==undefined&&elapsedMs<90000&&replies.at(-1)?.replyTo===String(event.user_id)
+    &&!/(?:不要|不用|别).{0,4}(?:回复|回答|接话)/.test(text)
+    &&/(?:你.{0,24}(?:怎么|为什么|看|说|能|会|答)|(?:刚才|那个|所以|再).{0,20}(?:怎么|如何|看|解释|操作|意思)|^在吗[?？]?$|^看(?:啊|呀|一下|视频)[!！?？]?$)/.test(text);
 }
 export function writeAliasSnapshot(stateDir:string,conversation:string,identity:string,state:{aliases:string[];version:string}):void{
   const folder=join(stateDir,'attention');mkdirSync(folder,{recursive:true,mode:0o700});

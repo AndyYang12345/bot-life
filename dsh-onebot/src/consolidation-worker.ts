@@ -29,7 +29,7 @@ function readPolicy(file:string){
   const scopes=p.allowedGroupIds.map((id:string)=>`onebot:${p.expectedSelfId}:group:${id}`);
   return {enabled:p.enabled&&p.memory?.enabled===true,scopes,ownerIds:p.ownerIds as string[],personalProfiles:p.memory?.personalProfiles===true,
     databaseFile:p.databaseConfigFile as string,model:p.model as string,styleLearning:p.conversationLearning?.enabled===true,
-    attentionLearning:p.attention?.recall?.enabled===true&&p.attention?.recall?.learning===true,identityName:p.conversationLearning?.identityName??'奶鲸'};
+    attentionLearning:p.attention?.recall?.enabled===true&&p.attention?.recall?.learning===true,identityName:p.conversationLearning?.identityName??'奶鲸',unifiedPersona:p.habits?.enabled===true&&p.habits?.unifiedPersona===true};
 }
 
 export async function runWorker(configFile:string,once=false):Promise<void>{
@@ -65,12 +65,12 @@ export async function runWorker(configFile:string,once=false):Promise<void>{
             const timer=setInterval(()=>{ledger.heartbeat(task.job,90000).catch(error=>{heartbeatError=error;});},20000);
             try{
               const model=new DeepSeekConsolidationModel(current.model,process.env.DEEPSEEK_API_KEY??'',{maxTokens:config.maxOutputTokens,timeoutMs:45000});
-              const engine=new Consolidator(queue,{personalProfiles:current.personalProfiles,ownerIds:current.ownerIds,maxPerHour:config.maxPerHour,maxPerDay:config.maxPerDay,styleLearning:current.styleLearning,attentionLearning:current.attentionLearning,identityName:current.identityName});
+              const engine=new Consolidator(queue,{personalProfiles:current.personalProfiles,ownerIds:current.ownerIds,maxPerHour:config.maxPerHour,maxPerDay:config.maxPerDay,styleLearning:current.styleLearning,attentionLearning:current.attentionLearning,identityName:current.identityName,unifiedPersona:current.unifiedPersona});
               const result=await engine.run(task,model,async()=>{
                 if(heartbeatError)throw heartbeatError;
                 const updated=readWorkerConfig(configFile),p=readPolicy(updated.policyFile);
                 return updated.enabled&&p.enabled&&p.databaseFile===policy.databaseFile&&p.scopes.includes(task.job.conversation)
-                  &&p.personalProfiles===current.personalProfiles&&p.styleLearning===current.styleLearning&&p.attentionLearning===current.attentionLearning&&p.identityName===current.identityName&&JSON.stringify(p.ownerIds)===JSON.stringify(current.ownerIds);
+                  &&p.personalProfiles===current.personalProfiles&&p.styleLearning===current.styleLearning&&p.attentionLearning===current.attentionLearning&&p.identityName===current.identityName&&p.unifiedPersona===current.unifiedPersona&&JSON.stringify(p.ownerIds)===JSON.stringify(current.ownerIds);
               });
               health.processed=Number(health.processed)+1;write('idle',{lastResult:result,lastCompletedAt:new Date().toISOString()});
             }catch(error){

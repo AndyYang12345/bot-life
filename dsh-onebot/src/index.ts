@@ -21,7 +21,7 @@ import { imageTimeline } from './timeline.js';
 import { modelUsage } from './accounting.js';
 import { memoryBundle, memoryInstructions, profileInstructions, memoryToolNames, memoryTools } from './memory-tools.js';
 import type { MessageEvent, Policy } from './types.js';
-import { attentionMode, immediateDecision, judgeAttention, validateAttention } from './attention.js';
+import { attentionMode, immediateDecision, judgeAttention, validateAttention,attentionJudgeLimit } from './attention.js';
 import type { AttentionRuntime, Decision } from './attention.js';
 import {learningEnabled,identityInstructions,conversationStyleInstructions,styleBundle,validateLearning} from './conversation-style.js';
 import {MemeFiles,memeTools,memeToolNames,memeInstructions,memeBundle,validateMemes,observeMemeOnly} from './meme-tools.js';
@@ -29,7 +29,7 @@ import type {MemeTurn} from './meme-tools.js';
 import {BiliClient,BiliReader,biliTools,biliToolNames,biliInstructions,validateBilibili} from './bilibili.js';
 import {DeepSeekWebClient,WebReader,webTools,webToolNames,webInstructions,validateWeb} from './web.js';
 import {habitTools,habitToolNames,habitInstructions,habitBundle} from './habit-tools.js';
-import {aliasSignal,LocalEmbedding,writeAliasSnapshot} from './attention-recall.js';
+import {aliasSignal,continuationSignal,LocalEmbedding,writeAliasSnapshot} from './attention-recall.js';
 import type {RecallSignal} from './attention-recall.js';
 
 export const name = 'im-onebot';
@@ -47,7 +47,7 @@ export async function apply(ctx: Context, config: { policyFile: string }): Promi
   validateMemes(policy.memes);
   validateBilibili(policy.bilibili);
   validateWeb(policy.web);
-  if(policy.habits&&(typeof policy.habits.enabled!=='boolean'||Object.keys(policy.habits).some(k=>k!=='enabled')))throw Error('Invalid habits configuration.');
+  if(policy.habits&&(typeof policy.habits.enabled!=='boolean'||policy.habits.unifiedPersona!==undefined&&typeof policy.habits.unifiedPersona!=='boolean'||Object.keys(policy.habits).some(k=>!['enabled','unifiedPersona'].includes(k))))throw Error('Invalid habits configuration.');
   if (!Array.isArray(policy.allowedGroupIds) || !Array.isArray(policy.allowedPrivateIds) || !Array.isArray(policy.ownerIds)) throw new Error('Explicit conversation and owner allowlists are required.');
   if (!policy.allowedGroupIds.length && !policy.allowedPrivateIds.length) throw new Error('No conversations are enabled.');
   if (![policy.maxQueue, policy.maxPerHour, policy.timeoutMs].every(n => Number.isSafeInteger(n) && n > 0)) throw new Error('Invalid queue or budget configuration.');
@@ -112,7 +112,8 @@ export async function apply(ctx: Context, config: { policyFile: string }): Promi
     const profile=personalProfiles?await memories.profile({job}):null;
     memoryContexts.set(job.conversation,memoryBundle(rows,{event_id:job.id,sender_id:String(event.user_id),peer_id:String(event.group_id??event.user_id)},profile,observations.get(job.conversation)??null));
   }
-  const habitContext=(job:Job)=>({job,actorId:String((job.payload as MessageEvent).user_id),ownerIds:policy.ownerIds,operationKey:'context'});
+  const habitContext=(job:Job)=>({job,actorId:String((job.payload as MessageEvent).user_id),ownerIds:policy.ownerIds,operationKey:'context',
+    defaultScope:policy.habits?.unifiedPersona&&policy.ownerIds.includes(String((job.payload as MessageEvent).user_id))?'global' as const:'person' as const});
   async function webPermitted(job:Job):Promise<boolean>{
     const text=textOf((job.payload as MessageEvent).message);
     if(/(?:不要|不用|别|禁止).{0,6}(?:上网|搜索|检索)/.test(text))return false;
@@ -297,6 +298,7 @@ export async function apply(ctx: Context, config: { policyFile: string }): Promi
           await dispose(job.conversation); await ledger.setSession(job, null);
           await ledger.append(job, 'turn.interrupted', { recovery: 'fresh_session', attempt: job.attempts });
         }
+        await ledger.append(job,'inbound.normalizing',{});
         const input = await normalize(event, client.api, media);
         await ledger.append(job, 'inbound.normalized', { body: input.body, references: input.references, images: input.images, quotes: input.quotes, mediaFailures: input.mediaFailures,
           forwards: input.forwards, forwardNodes: input.forwardNodes, videos: input.videos, links: input.links, truncated: input.truncated, mediaErrors: input.mediaErrors });
@@ -330,11 +332,17 @@ export async function apply(ctx: Context, config: { policyFile: string }): Promi
           let recall:RecallSignal={kind:'none'},aliases:string[]=[];
           const elapsedMs=recentContext?.lastSpokenAt?Math.max(0,Date.now()-Date.parse(recentContext.lastSpokenAt)):undefined;
           if(recallEnabled&&mode==='attention'&&(!decision||decision.reason==='cooldown')){
+            await ledger.append(job,'attention.match_started',{});
             const learned=await attentionStore.context(job),identity=policy.conversationLearning?.identityName??'奶鲸';
             aliases=[identity.normalize('NFKC').toLowerCase(),...learned.aliases];writeAliasSnapshot(policy.stateDir,job.conversation,identity,learned);
             recall=aliasSignal(event,aliases);
-            if(recall.kind==='none'&&decision?.reason==='cooldown'&&embedding&&!/(?:不要|不用|别).{0,4}(?:回复|回答|接话)/.test(textOf(event.message)))
+            await ledger.append(job,'attention.matched',{...recall,aliases});
+            if(recall.kind==='none'&&decision?.reason==='cooldown'&&continuationSignal(event,recentContext?.botReplies??[],elapsedMs))recall={kind:'followup'};
+            if(recall.kind==='none'&&decision?.reason==='cooldown'&&embedding&&!/(?:不要|不用|别).{0,4}(?:回复|回答|接话)/.test(textOf(event.message))){
+              await ledger.append(job,'attention.embedding_started',{device:policy.attention?.recall?.embedding?.device??'cpu',model:'BAAI/bge-small-zh-v1.5'});
               recall=await embedding.recall(textOf(event.message),elapsedMs!==undefined&&elapsedMs<120000?recentContext?.botReplies.map(r=>r.body)??[]:[]);
+              await ledger.append(job,'attention.embedding_completed',recall);
+            }
             if(recall.kind!=='none'||recall.error||recall.positive!==undefined)await ledger.append(job,'attention.recalled',recall);
             if(recall.kind!=='none'){
               const allowed=recall.kind==='call'||decision?.reason!=='cooldown'||await ledger.reserve(job.conversation+':recall','recall:'+job.id,policy.attention?.recall?.maxPerHour??6);
@@ -343,9 +351,10 @@ export async function apply(ctx: Context, config: { policyFile: string }): Promi
             }
           }
           if (!decision) {
-            if (!await ledger.reserve(job.conversation + ':turns', 'attention:' + job.id, policy.maxPerHour)) decision = { action:'observe', source:'budget', reason:'model_budget' };
+            if (!await ledger.reserve(job.conversation + ':turns', 'attention:' + job.id, attentionJudgeLimit(policy.maxPerHour))) decision = { action:'observe', source:'budget', reason:'attention_budget_reply_reserved' };
             else {
               if (memoryEnabled) await refreshMemory(job);
+              await ledger.append(job,'attention.judge_started',{});
               const judged = await judgeAttention(ctx.get('llm') as AttentionRuntime, {provider:policy.provider,model:policy.model},
                 { current:input.body, recent:recentContext?.messages ?? [], memory:memoryContexts.get(job.conversation) ?? '', persona:identityInstructions(policy),style:styleContexts.get(job.conversation),
                   participation:{aliases,elapsedMs,recall,botReplies:recentContext?.botReplies??[],habits:habitsEnabled?(await habits.list(habitContext(job))).effective:[]} });

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>奶鲸 · 对话观测台</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header><div class="brand"><span class="whale">◒</span><div><h1>奶鲸 <span>对话观测台</span></h1><p>CONVERSATION OBSERVATORY · LOCAL</p></div></div><div id="health" class="health">正在连接本地账本…</div><button id="self-toggle" class="secondary">统一偏好</button></header>
+<nav id="tabs" aria-label="群聊切换"></nav>
+<main>
+<section class="conversation"><div class="panel-heading"><div><span class="eyebrow">CONVERSATION</span><h2 id="group-title">正在读取会话</h2></div><div class="chat-controls"><label><input id="show-quiet" type="checkbox" checked> 显示旁观消息</label><button id="older" class="secondary">更早记录</button><button id="live" class="secondary">实时</button></div></div>
+<div id="notice" role="status"></div><div id="messages" class="messages"><p class="empty">等待本地会话记录</p></div><footer><span class="live-dot"></span><span id="refresh-state">每 1.5 秒同步实际账本</span><span id="budget"></span></footer></section>
+<aside class="inspector"><div class="panel-heading"><div><span class="eyebrow">EXECUTION TRACE</span><h2>这条消息发生了什么</h2></div><button id="replay" class="secondary">回放</button></div><div id="selection" class="selection">选择一条消息，查看她的处理路径</div><div id="pipeline" class="pipeline"></div><div id="usage" class="usage"></div><details class="events-box"><summary>实际事件明细</summary><div id="events"></div></details></aside>
+</main>
+<dialog id="detail-dialog"><div class="dialog-header"><div><span class="eyebrow">RECALL INSPECTOR</span><h2 id="detail-title">召回详情</h2></div><button id="detail-close" class="secondary">关闭</button></div><div id="detail-body"></div><canvas id="cloud" width="900" height="400" aria-label="召回相似度图形示意"></canvas><p class="disclaimer">点的位置仅用于图形化说明，不是真实高维向量投影；亮度与数值来自本条实际匹配事件。未执行 embedding 时不会展示虚构的向量命中。</p></dialog>
+<dialog id="self-dialog"><div class="dialog-header"><div><span class="eyebrow">ONE IDENTITY · ALL CONVERSATIONS</span><h2>她的统一聊天偏好</h2></div><button id="self-close" class="secondary">关闭</button></div><p id="self-mode"></p><div id="self-settings"></div><p class="disclaimer">这里展示后台保存的统一基础。管理员在任一允许群中的明确教导可修订它；群内口头禅只作补充。当前页面只读，不发送 QQ 消息，也不修改偏好。</p></dialog>
+<script type="module" src="/app.js"></script></body></html>

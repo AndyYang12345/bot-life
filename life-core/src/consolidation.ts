@@ -8,12 +8,16 @@ import {StyleStore,parseStyleProposals} from './style.js';
 import type {StyleInput,StyleProposal} from './style.js';
 import {AttentionStore,parseAliasProposals} from './attention-learning.js';
 import type {AliasInput,AliasProposal} from './attention-learning.js';
+import {HabitStore,habitSettings,feedbackChoices} from './habits.js';
+import type {HabitSetting} from './habits.js';
+interface SelfHabitChange {setting:HabitSetting;value:string;event_id:string;quote:string}
 
 export interface ExtractionInput {
   events:{id:string;text:string;at:string}[];
   existing:{id:string;revision:number;type:string;status:string;slot:string|null;content:string;summary:string}[];
   style?:StyleInput;
   attention?:AliasInput;
+  selfHabits?:{feedback:{id:string;text:string}[];settings:typeof habitSettings};
 }
 export interface ExtractionResponse {content:string;usage?:TokenUsage}
 export interface Extractor {provider:string;model:string;extract(input:ExtractionInput):Promise<ExtractionResponse>}
@@ -24,15 +28,15 @@ interface Proposal {
   slot:string|null;evidence:{event_id:string;quote:string}[];
   duplicate_of:string|null;contradicts:string|null;
 }
-interface Plan {version:1;memories:Proposal[];rejected:number;filteredSources:number;references:ExtractionInput['existing'];style?:StyleInput;styleRules?:StyleProposal[];attention?:AliasInput;aliases?:AliasProposal[]}
+interface Plan {version:1;memories:Proposal[];rejected:number;filteredSources:number;references:ExtractionInput['existing'];style?:StyleInput;styleRules?:StyleProposal[];attention?:AliasInput;aliases?:AliasProposal[];selfHabits?:ExtractionInput['selfHabits'];habitChanges?:SelfHabitChange[]}
 const keys=['type','content','summary','source_kind','confidence','importance','sensitivity','share_category','slot','evidence','duplicate_of','contradicts'];
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const object=(v:unknown):v is Record<string,any>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 
-export function parseExtraction(content:string,input:ExtractionInput):{memories:Proposal[];rejected:number;styleRules?:StyleProposal[];aliases?:AliasProposal[]}{
+export function parseExtraction(content:string,input:ExtractionInput):{memories:Proposal[];rejected:number;styleRules?:StyleProposal[];aliases?:AliasProposal[];habitChanges?:SelfHabitChange[]}{
   if(content.length>20000)throw Error('invalid_extraction');
   let value:unknown;try{value=JSON.parse(content);}catch{throw Error('invalid_extraction');}
-  if(!object(value)||Object.keys(value).some(k=>!['memories',...(input.style?['styles']:[]),...(input.attention?['aliases']:[])].includes(k))||!Array.isArray(value.memories)||value.memories.length>4)throw Error('invalid_extraction');
+  if(!object(value)||Object.keys(value).some(k=>!['memories',...(input.style?['styles']:[]),...(input.attention?['aliases']:[]),...(input.selfHabits?['habit_changes']:[])].includes(k))||!Array.isArray(value.memories)||value.memories.length>4)throw Error('invalid_extraction');
   const sources=new Map(input.events.map(e=>[e.id,e.text.normalize('NFKC')]));
   const references=new Set(input.existing.map(e=>e.id));
   const memories:Proposal[]=[];let rejected=0;
@@ -54,9 +58,19 @@ export function parseExtraction(content:string,input:ExtractionInput):{memories:
     }
     memories.push(m as Proposal);
   }
-  const result:{memories:Proposal[];rejected:number;styleRules?:StyleProposal[];aliases?:AliasProposal[]}={memories,rejected};
+  const result:{memories:Proposal[];rejected:number;styleRules?:StyleProposal[];aliases?:AliasProposal[];habitChanges?:SelfHabitChange[]}={memories,rejected};
   if(input.style){const styles=parseStyleProposals(value.styles,input.style);result.styleRules=styles.rules;result.rejected+=styles.rejected;}
   if(input.attention){const aliases=parseAliasProposals(value.aliases,input.attention);result.aliases=aliases.aliases;result.rejected+=aliases.rejected;}
+  if(input.selfHabits&&value.habit_changes!==undefined){
+    if(!Array.isArray(value.habit_changes)||value.habit_changes.length>3)throw Error('invalid_extraction');
+    result.habitChanges=[];
+    for(const p of value.habit_changes){
+      if(!object(p)||Object.keys(p).some(k=>!['setting','value','event_id','quote'].includes(k))||typeof p.quote!=='string'
+        ||!input.selfHabits.feedback.find(e=>e.id===p.event_id)?.text.includes(p.quote)
+        ||!feedbackChoices(p.quote).some(c=>c.setting===p.setting&&c.value===p.value)){result.rejected++;continue;}
+      result.habitChanges.push(p as SelfHabitChange);
+    }
+  }
   return result;
 }
 
@@ -64,7 +78,7 @@ export function parseExtraction(content:string,input:ExtractionInput):{memories:
 export class Consolidator {
   readonly queue:ConsolidationQueue;
   readonly store:MemoryStore;
-  constructor(queue:ConsolidationQueue,private options:{personalProfiles:boolean;ownerIds:readonly string[];maxPerHour:number;maxPerDay:number;styleLearning?:boolean;attentionLearning?:boolean;identityName?:string}){
+  constructor(queue:ConsolidationQueue,private options:{personalProfiles:boolean;ownerIds:readonly string[];maxPerHour:number;maxPerDay:number;styleLearning?:boolean;attentionLearning?:boolean;identityName?:string;unifiedPersona?:boolean}){
     this.queue=queue;this.store=new MemoryStore(queue.ledger,{personalProfiles:options.personalProfiles});
   }
   private async existing(task:MemoryTask):Promise<ExtractionInput['existing']>{
@@ -88,6 +102,10 @@ export class Consolidator {
         if(!paused)input.style=await new StyleStore(this.queue.ledger).input(task.job,Math.min(3400,13500-JSON.stringify(input).length));
       }
       if(this.options.attentionLearning)input.attention=await new AttentionStore(this.queue.ledger).input(task.job,this.options.identityName??'奶鲸',Math.min(2600,13500-JSON.stringify(input).length));
+      if(this.options.unifiedPersona&&this.options.ownerIds.includes(task.actor)){
+        const feedback=events.filter(e=>e.text.length<=600&&feedbackChoices(e.text).length).slice(-3).map(e=>({id:e.id,text:e.text}));
+        if(feedback.length){const selfHabits={feedback,settings:habitSettings};if(JSON.stringify({...input,selfHabits}).length<=13500)input.selfHabits=selfHabits;}
+      }
       let parsed:ReturnType<typeof parseExtraction>={memories:[],rejected:0};
       if(events.length||input.style||input.attention){
         if(JSON.stringify(input).length>14000)throw Error('input_budget_exceeded');
@@ -102,7 +120,7 @@ export class Consolidator {
       // Store decisions before applying them: recovery replays the same operation
       // keys and never asks the model to improvise a different replacement plan.
       // Only reference IDs/revisions are retained, not other groups' memory text.
-      plan={version:1,...parsed,filteredSources:sources.length-events.length,references:input.existing.map(e=>({...e,content:'',summary:''})),...(input.style?{style:input.style}:{}),...(input.attention?{attention:input.attention}:{})};
+      plan={version:1,...parsed,filteredSources:sources.length-events.length,references:input.existing.map(e=>({...e,content:'',summary:''})),...(input.style?{style:input.style}:{}),...(input.attention?{attention:input.attention}:{}),...(input.selfHabits?{selfHabits:input.selfHabits}:{})};
       await this.queue.savePlan(task,plan);
     }
     if(plan.version!==1||!Array.isArray(plan.memories))throw Error('invalid_saved_plan');
@@ -153,7 +171,19 @@ export class Consolidator {
       const paused=!!(await this.queue.ledger.pool.query("SELECT key FROM life_settings WHERE key='attention_learning_paused' AND value='true'")).rowCount;
       if(!paused)attention=await new AttentionStore(this.queue.ledger).apply(task.job,plan.attention,plan.aliases??[]);
     }
-    const combined={...result,...(style?{style}:{}),...(attention?{attention}:{})};
+    let selfHabits:unknown;
+    if(this.options.unifiedPersona&&this.options.ownerIds.includes(task.actor)&&plan.selfHabits){
+      const store=new HabitStore(this.queue.ledger);let saved=0,rejected=0;
+      for(const [index,p] of (plan.habitChanges??[]).entries()){
+        if(!await stillAllowed())throw Error('scope_disabled');
+        const ctx={job:task.job,actorId:task.actor,ownerIds:this.options.ownerIds,operationKey:'self-summary:'+task.job.memoryTaskId+':'+index,defaultScope:'global' as const,sourceEventId:p.event_id};
+        try{const state=await store.list(ctx),existing=state.rules.find((r:any)=>r.scope==='global'&&r.setting===p.setting);
+          await store.save(ctx,{scope:'global',setting:p.setting,value:p.value,expected_revision:existing?.revision??0,quote:p.quote});saved++;
+        }catch(error){if(error instanceof MemoryError){rejected++;continue;}throw error;}
+      }
+      selfHabits={saved,rejected};
+    }
+    const combined={...result,...(style?{style}:{}),...(attention?{attention}:{}),...(selfHabits?{selfHabits}:{})};
     await this.queue.complete(task,combined);return combined;
   }
 }

@@ -127,6 +127,24 @@ try {
         await c.query("INSERT INTO life_events(id,conversation,kind,payload) VALUES($1,'__admin__',$2,$3)",[randomUUID(),'admin.'+command,{conversation}]);
       });console.log(JSON.stringify({applied:true}));
     }
+  } else if(command==='habit-promote'){
+    const actor=option('--actor'),realm=option('--realm');if(!args.includes('--actor')||!args.includes('--realm')||!actor||!realm)throw Error('explicit_actor_and_realm_required');
+    const result=await ledger.transaction(async c=>{
+      await c.query('SELECT pg_advisory_xact_lock(801205)');
+      if((await c.query("SELECT j.id FROM life_jobs j JOIN life_conversations conv ON conv.key=j.conversation WHERE conv.identity_realm=$1 AND j.status='running' AND j.lease_until>now()",[realm])).rowCount)throw Error('running_jobs_prevent_profile_promotion');
+      const rows=(await c.query("SELECT * FROM life_habits WHERE realm=$1 AND actor_id=$2 AND scope='person' AND status='active' FOR UPDATE",[realm,actor])).rows;
+      for(const row of rows){
+        const existing=(await c.query("SELECT id FROM life_habits WHERE realm=$1 AND scope='global' AND setting=$2",[realm,row.setting])).rows[0];
+        const updated=(await c.query(existing?"UPDATE life_habits SET status='revoked',revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *"
+          :"UPDATE life_habits SET scope='global',subject_key=realm,person_id=NULL,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *",[row.id])).rows[0];
+        const old=(await c.query('SELECT quote FROM life_habit_revisions WHERE habit_id=$1 ORDER BY revision DESC LIMIT 1',[row.id])).rows[0];
+        await c.query('INSERT INTO life_habit_revisions(habit_id,revision,source_id,actor_id,quote,payload) VALUES($1,$2,$3,$4,$5,$6)',[row.id,updated.revision,row.source_id,actor,old?.quote??'',
+          {id:row.id,scope:updated.scope,setting:updated.setting,value:updated.value,status:updated.status,revision:updated.revision,reason:'administrator_promoted_unified_base',existing_base:existing?.id??null}]);
+      }
+      await c.query('UPDATE life_conversations SET session_id=NULL,generation=generation+1 WHERE identity_realm=$1',[realm]);
+      await c.query("INSERT INTO life_events(id,conversation,kind,payload) VALUES($1,'__admin__','admin.habit_promote',$2)",[randomUUID(),{realm,actor,count:rows.length}]);
+      return {promoted:rows.length};
+    });console.log(JSON.stringify(result));
   } else if(command==='habit-list'){
     const conversation=option('--conversation');if(!args.includes('--conversation')||!conversation)throw Error('explicit_conversation_required');
     const rows=(await ledger.pool.query('SELECT * FROM life_habits WHERE conversation=$1 OR source_conversation=$1 ORDER BY updated_at DESC',[conversation])).rows;

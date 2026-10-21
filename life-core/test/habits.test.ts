@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {Ledger,HabitStore,databaseConfig,feedbackChoices,feedbackScope} from '../src/index.js';
+import {Ledger,HabitStore,Consolidator,ConsolidationQueue,databaseConfig,feedbackChoices,feedbackScope} from '../src/index.js';
 import type {HabitContext,Job} from '../src/index.js';
 
 const config=process.env.LIFE_TEST_ADMIN_CONFIG;
@@ -100,5 +100,26 @@ describe.skipIf(!config)('feedback habits with real PostgreSQL',()=>{
   });
   it('prevents runtime erasure and changes to habit revision history',async()=>{
     await expect(app.pool.query('DELETE FROM life_habits')).rejects.toThrow();await expect(app.pool.query("UPDATE life_habit_revisions SET payload='{}'")).rejects.toThrow();
+  });
+  it('uses a unified bot base for administrator teaching while preserving explicit personal scope',async()=>{
+    let job=await start('以后不打句号，直接说内容');
+    expect(await store.observe({...context(job),defaultScope:'global'})).toMatchObject({state:'saved',changes:[{scope:'global',setting:'reply.punctuation'},{scope:'global',setting:'reply.stance'}]});await app.complete(job);
+    job=await start('普通问题',B,'another');expect((await store.list(context(job,'another'))).self_base).toHaveLength(2);await app.complete(job);
+    job=await start('以后只对我简短回答');expect(await store.observe({...context(job),defaultScope:'global'})).toMatchObject({changes:[{scope:'person'}]});
+  });
+  it('promotes existing administrator preferences with an explicit audited management operation',async()=>{
+    const job=await start('以后回答简短一点');await store.observe(context(job));await app.complete(job);
+    const promoted=run('habit-promote','--actor','owner','--realm','onebot:bot');expect(promoted.status,promoted.stderr).toBe(0);expect(JSON.parse(promoted.stdout).promoted).toBe(1);
+    const row=(await admin.pool.query('SELECT scope,revision,person_id FROM life_habits')).rows[0];expect(row).toEqual({scope:'global',revision:2,person_id:null});
+    expect((await admin.pool.query("SELECT count(*)::int AS n FROM life_events WHERE kind='admin.habit_promote'")).rows[0].n).toBe(1);
+  });
+  it('refines the unified base in the same background request using the actual earlier administrator source',async()=>{
+    let job=await start('以后不打句号');const source=job.id;await app.complete(job);
+    job=await start('普通聊天一');await app.complete(job);job=await start('普通聊天二');await app.complete(job);
+    const queue=new ConsolidationQueue(app),task=(await queue.claim(randomUUID(),['onebot:bot:group:a'],{minMessages:1,maxMessages:12,maxAgeMs:0,leaseMs:60000}))!;
+    const model={provider:'fixture',model:'fixture',extract:async(i:any)=>{expect(i.selfHabits.feedback[0].id).toBe(source);return {content:JSON.stringify({memories:[],habit_changes:[{setting:'reply.punctuation',value:'natural',event_id:source,quote:'以后不打句号'}]})};}};
+    const result=await new Consolidator(queue,{personalProfiles:true,ownerIds:['owner'],maxPerHour:2,maxPerDay:12,unifiedPersona:true}).run(task,model);
+    expect(result).toMatchObject({selfHabits:{saved:1,rejected:0}});
+    expect((await admin.pool.query('SELECT scope,source_id FROM life_habits')).rows[0]).toEqual({scope:'global',source_id:source});
   });
 });

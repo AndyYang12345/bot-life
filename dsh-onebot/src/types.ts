@@ -25,6 +25,6 @@ export interface Policy {
   memes?: {enabled:boolean;cooldownMs?:number};
   bilibili?: import('./bilibili.js').BiliConfig;
   web?: import('./web.js').WebConfig;
-  habits?: {enabled:boolean};
+  habits?: {enabled:boolean;unifiedPersona?:boolean};
 }
 export type Api = <T = Record<string, unknown>>(action: string, args?: Record<string, unknown>) => Promise<T>;
