@@ -1,0 +1,8 @@
+{
+  "name": "qqbot-life",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@12.4.2",
+  "engines": { "node": ">=24" },
+  "scripts": { "check": "scripts/check-project", "check:repository": "scripts/check-repository" }
+}

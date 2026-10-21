@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Inspect tracked contents against local credential values without printing them."""
+import json
+import os
+import pathlib
+import re
+import shlex
+import subprocess
+import sys
+
+root = pathlib.Path(__file__).resolve().parents[1]
+paths = subprocess.check_output(['git','-C',str(root),'ls-files','-z']).decode().split('\0')
+paths = [p for p in paths if p]
+secrets = set()
+def collect(value):
+    if isinstance(value,dict):
+        for key,item in value.items():
+            if re.search(r'(token|secret|password|api_?key)$',key,re.I) and isinstance(item,str) and len(item)>=12:
+                secrets.add(item.encode())
+            collect(item)
+    elif isinstance(value,list):
+        for item in value: collect(item)
+for path in (root/'data/config').glob('*.json'):
+    collect(json.loads(path.read_text()))
+bili_credential=root/'data/bilibili/credential.json'
+if bili_credential.is_file():
+    for value in json.loads(bili_credential.read_text()).values():
+        if isinstance(value,str) and len(value)>=12: secrets.add(value.encode())
+for path in (root/'data/config').glob('*password'):
+    secrets.add(path.read_bytes().strip())
+qq_login_digest = root/'data/config/qq-login.md5'
+if qq_login_digest.is_file():
+    secrets.add(qq_login_digest.read_bytes().strip())
+for path in [root/'data/config/model.env', pathlib.Path(os.environ.get('ONEBOT_MODEL_ENV','/nonexistent'))]:
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            match=re.match(r'\s*(?:export\s+)?([A-Z_]+)=(.*)',line)
+            if match and re.search(r'(KEY|SECRET|TOKEN|PASSWORD)$',match[1]):
+                values=shlex.split(match[2],comments=True)
+                if values and len(values[0])>=12: secrets.add(values[0].encode())
+failures=[]
+for name in paths:
+    if name.split('/')[0] in {'data','repos','downloads','workspace','backups','exports','evidence'} or '/node_modules/' in name or '/__pycache__/' in name or name.endswith('.pyc') or name=='deploy/.env':
+        failures.append({'path':name,'reason':'private_or_generated_path'})
+        continue
+    content=(root/name).read_bytes()
+    if any(value and value in content for value in secrets):
+        failures.append({'path':name,'reason':'local_credential_value'})
+print(json.dumps({'trackedFiles':len(paths),'privateValuesChecked':len(secrets),'violations':failures},ensure_ascii=False))
+sys.exit(1 if failures else 0)

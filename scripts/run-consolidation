@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+NODE_BIN=${ONEBOT_NODE_BIN:-$(command -v node)}
+MODEL_ENV=${ONEBOT_MODEL_ENV:-$TASK_ROOT/data/config/model.env}
+export TZ=Asia/Shanghai
+unset DEEPSEEK_API_KEY
+set -a
+. "$MODEL_ENV"
+set +a
+: "${DEEPSEEK_API_KEY:?Fill this bot's private model.env}"
+exec 9>"$TASK_ROOT/data/adapter/consolidation.lock"
+flock -n 9 || { echo 'Memory consolidation worker already running.' >&2; exit 1; }
+cd "$TASK_ROOT"
+exec "$NODE_BIN" "$TASK_ROOT/dsh-onebot/dist/consolidation-worker.js" --config "$TASK_ROOT/data/config/consolidation.json" "$@"

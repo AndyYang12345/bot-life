@@ -1,0 +1,42 @@
+{
+  "httpUrl": "http://127.0.0.1:3000",
+  "wsUrl": "ws://127.0.0.1:3001",
+  "onebotConfigFile": "/ABSOLUTE/WORKSPACE/data/config/onebot11.json",
+  "databaseConfigFile": "/ABSOLUTE/WORKSPACE/data/config/life-db-app.json",
+  "allowedGroupIds": ["YOUR_TEST_GROUP_ID"],
+  "allowedPrivateIds": [],
+  "expectedSelfId": "YOUR_BOT_QQ_ID",
+  "ownerIds": ["YOUR_ADMIN_QQ_ID"],
+  "workspace": "/ABSOLUTE/WORKSPACE/workspace",
+  "stateDir": "/ABSOLUTE/WORKSPACE/data/adapter",
+  "persona": "用中文简短、自然地回复群聊；图片必须通过 read_image 查看，不猜测不可用图片的内容。",
+  "provider": "deepseek-official",
+  "model": "deepseek-flash",
+  "enabled": false,
+  "maxQueue": 20,
+  "maxPerHour": 40,
+  "timeoutMs": 180000,
+  "memory": { "enabled": false, "contextLimit": 6, "personalProfiles": false },
+  "attention": {
+    "mode": "replyAll", "groupModes": {}, "cooldownMs": 20000,
+    "recall": {
+      "enabled": false, "learning": false, "maxPerHour": 6,
+      "embedding": {
+        "enabled": false, "python": "/ABSOLUTE/WORKSPACE/data/attention/venv/bin/python",
+        "server": "/ABSOLUTE/WORKSPACE/attention_backend/server.py", "cacheDir": "/ABSOLUTE/WORKSPACE/data/attention/models",
+        "device": "cpu", "threshold": 0.64, "margin": 0.1, "contextThreshold": 0.7, "timeoutMs": 1500
+      }
+    }
+  },
+  "conversationLearning": { "enabled": false, "identityName": "奶鲸" },
+  "memes": { "enabled": false, "cooldownMs": 300000 },
+  "bilibili": {
+    "enabled": false,
+    "python": "/ABSOLUTE/WORKSPACE/data/bilibili/venv/bin/python",
+    "server": "/ABSOLUTE/WORKSPACE/bilibili/server.py",
+    "credentials": "/ABSOLUTE/WORKSPACE/data/bilibili/credential.json",
+    "maxPerHour": 40
+  },
+  "web": {"enabled": false, "maxPerHour": 20, "maxPerDay": 100},
+  "habits": {"enabled": false}
+}

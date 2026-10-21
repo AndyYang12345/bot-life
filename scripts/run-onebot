@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+NODE_BIN=${ONEBOT_NODE_BIN:-$(command -v node)}
+DSH_BIN=${ONEBOT_DSH_BIN:-$(npm root -g)/@deepseek-ai/dsh/lib/bin.js}
+MODEL_ENV=${ONEBOT_MODEL_ENV:-$TASK_ROOT/data/config/model.env}
+export DSH_HOME="$TASK_ROOT/data/dsh-home"
+export HOME="$TASK_ROOT/data/home"
+export ONEBOT_POLICY="$TASK_ROOT/data/config/adapter.json"
+export DSH_PERMISSION_MODE=workspace-write
+export PATH="$(dirname -- "$NODE_BIN"):/usr/local/bin:/usr/bin:/bin"
+export TZ=Asia/Shanghai
+# Load this bot's private credential without copying it into source/profile files.
+unset DEEPSEEK_API_KEY
+set -a
+. "$MODEL_ENV"
+set +a
+: "${DEEPSEEK_API_KEY:?Fill the private bot model.env before starting}"
+unset QQBOT_APPID QQBOT_SECRET
+exec 9>"$DSH_HOME/onebot.lock"
+flock -n 9 || { echo 'OneBot adapter already running.' >&2; exit 1; }
+"$TASK_ROOT/scripts/wait-onebot" --policy "$ONEBOT_POLICY"
+cd "$TASK_ROOT/workspace"
+exec "$NODE_BIN" "$DSH_BIN" --profile onebot

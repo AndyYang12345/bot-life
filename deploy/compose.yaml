@@ -1,0 +1,42 @@
+name: napcat-poc
+
+services:
+  napcat:
+    image: ${NAPCAT_IMAGE:?Set NAPCAT_IMAGE in deploy/.env}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        NAPCAT_BASE: ${NAPCAT_BASE:?Set the pinned upstream runtime}
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      MODE: ws
+      NAPCAT_UID: "1000"
+      NAPCAT_GID: "1000"
+      TZ: Asia/Shanghai
+      ACCOUNT: ${NAPCAT_ACCOUNT:-}
+    ports:
+      - "127.0.0.1:6099:6099"
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ../data/qq:/app/.config/QQ
+      - ../data/config:/app/napcat/config
+      - ../data/plugins:/app/napcat/plugins
+      - ../data/media:/data/media
+      - ../data/logs:/app/napcat/logs
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 256m
+    mem_limit: 2g
+    pids_limit: 512
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

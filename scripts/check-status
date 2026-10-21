@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Read local readiness without printing credentials or QR URLs."""
+import hashlib
+import datetime
+import json
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def request(path, data=None, credential=None):
+    headers = {"Content-Type": "application/json"}
+    if credential:
+        headers["Authorization"] = "Bearer " + credential
+    req = urllib.request.Request(
+        "http://127.0.0.1:6099/api" + path,
+        data=json.dumps(data).encode() if data is not None else None,
+        headers=headers,
+    )
+    with client.open(req, timeout=8) as response:
+        return json.load(response)
+
+
+try:
+    token = json.loads((root / "data/config/webui.json").read_text())["token"]
+    login = request("/auth/login", {"hash": hashlib.sha256((token + ".napcat").encode()).hexdigest()})
+    credential = login.get("data", {}).get("Credential")
+    if not credential:
+        print(json.dumps({"webui": "reachable", "authentication": "failed"}))
+        sys.exit(1)
+    status = request("/QQLogin/CheckLoginStatus", {}, credential)
+    version = request("/base/GetNapCatVersion", credential=credential)
+    rejected = request("/QQLogin/CheckLoginStatus", {})
+    data = status.get("data") or {}
+    result = {
+        "webui": "ready",
+        "authentication": "passed",
+        "unauthenticated_request_rejected": rejected.get("code") != 0,
+        "napcat_version": version.get("data"),
+        "qq_logged_in": data.get("isLogin", False),
+        "login_phase": data.get("loginPhase"),
+        "core_ready": data.get("coreReady", False),
+        "qr_available": bool(data.get("qrcodeurl")),
+    }
+    # Inspect mount/entrypoint metadata only. Never print Docker Config.Env,
+    # credential contents or raw login errors (which may contain challenge URLs).
+    secret = root / "data/config/qq-login.md5"
+    configured = secret.is_file()
+    fallback = {"configured_locally": configured, "applied_to_container": None}
+    try:
+        inspection = subprocess.run(["docker", "inspect", "napcat-poc-napcat-1"],
+                                    capture_output=True, text=True, timeout=5, check=True)
+        container = json.loads(inspection.stdout)[0]
+        mounted = any(m.get("Destination") == "/run/secrets/napcat-qq-password-md5" for m in container["Mounts"])
+        wrapper = "/usr/local/bin/napcat-login-entrypoint" in (container["Config"].get("Entrypoint") or [])
+        started = datetime.datetime.fromisoformat(container["State"]["StartedAt"].replace("Z", "+00:00")).timestamp()
+        fallback["applied_to_container"] = configured and mounted and wrapper and started >= secret.stat().st_mtime
+    except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError):
+        pass
+    result["password_fallback"] = fallback
+    if not data.get("isLogin") and data.get("loginPhase") == "waiting_qrcode":
+        result["recovery_action"] = "complete_verification_in_webui_or_configure_password_fallback"
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+except (OSError, urllib.error.URLError, ValueError, KeyError):
+    print(json.dumps({"webui": "not_ready", "hint": "Check scripts/napcat status and local logs."}))
+    sys.exit(1)

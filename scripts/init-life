@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Create private local PostgreSQL configuration; never overwrite existing secrets."""
+import json
+import pathlib
+import secrets
+import sys
+
+root = pathlib.Path(__file__).resolve().parents[1]
+config = root/'data/config'
+config.mkdir(mode=0o700,parents=True,exist_ok=True)
+try:
+    for role in ('admin','app'):
+        password = config/('pg-'+role+'-password')
+        if not password.exists():
+            if (root/'data/postgres/PG_VERSION').exists():
+                raise ValueError('Restore original password files for the existing database')
+            password.write_text(secrets.token_hex(32)); password.chmod(0o600)
+        target = config/('life-db-'+role+'.json')
+        if not target.exists():
+            target.write_text(json.dumps(dict(host='127.0.0.1',port=15432,database='qqbot_life',user='life_'+role,passwordFile=str(password)),indent=2)); target.chmod(0o600)
+    print(json.dumps({'configDirectory':str(config),'secretsPrinted':False,'existingFilesOverwritten':False}))
+except (OSError,ValueError):
+    print('Unable to initialize database configuration; preserve existing data/config files.',file=sys.stderr)
+    sys.exit(1)

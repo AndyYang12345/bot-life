@@ -1,0 +1,16 @@
+[Unit]
+Description=QQBot Life background memory consolidation
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/ABSOLUTE/WORKSPACE
+ExecStart=/ABSOLUTE/WORKSPACE/scripts/run-consolidation
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=70
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

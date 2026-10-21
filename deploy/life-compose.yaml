@@ -1,0 +1,31 @@
+name: napcat-life
+services:
+  postgres:
+    image: postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qqbot_life
+      POSTGRES_USER: life_admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_admin
+      TZ: Asia/Shanghai
+    secrets:
+      - pg_admin
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - ../data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U life_admin -d qqbot_life"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+secrets:
+  pg_admin:
+    file: ../data/config/pg-admin-password

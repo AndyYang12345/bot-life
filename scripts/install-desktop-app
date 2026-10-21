@@ -1,0 +1,16 @@
+#!/usr/bin/python3
+"""Register the terminal launcher in the current user's application list."""
+from pathlib import Path
+import sys
+
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
+from desktop_app.install import install
+
+try:
+    destination = install(root)
+    print('已安装应用：奶鲸 Bot')
+    print(destination)
+    print('在应用列表搜索“奶鲸”或“NapCat”即可启动。')
+except (OSError, ValueError):
+    sys.exit('安装未完成，请检查用户 applications 目录与 desktop entry。')

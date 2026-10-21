@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Manage only this workspace's isolated PostgreSQL. Never prints credentials."""
+import datetime
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(__file__).resolve().parents[1]
+compose = ['docker', 'compose', '-f', str(root / 'deploy/life-compose.yaml')]
+container = 'napcat-life-postgres-1'
+command = sys.argv[1] if len(sys.argv) > 1 else 'status'
+try:
+    if command in ('start', 'stop', 'restart'):
+        subprocess.run(compose + (['up', '-d'] if command == 'start' else [command]), check=True)
+    elif command == 'status':
+        subprocess.run(compose + ['ps'], check=True)
+    elif command == 'backup':
+        folder = root / 'backups'
+        folder.mkdir(mode=0o700, exist_ok=True)
+        path = folder / ('life-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '.dump')
+        with path.open('xb') as output:
+            path.chmod(0o600)
+            try:
+                subprocess.run(['docker', 'exec', container, 'pg_dump', '-U', 'life_admin', '-d', 'qqbot_life', '-Fc', '--no-owner', '--no-acl'], stdout=output, stderr=subprocess.PIPE, check=True)
+                output.flush(); os.fsync(output.fileno())
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
+        print(json.dumps({'backup': str(path), 'bytes': path.stat().st_size, 'includes': 'PostgreSQL only; media and DSH artifacts require separate backup'}))
+    elif command == 'verify-backup':
+        path = pathlib.Path(sys.argv[2]).resolve()
+        db = 'qqbot_life_restore_' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S%f')
+        def sql(query, database='postgres'):
+            return subprocess.run(['docker','exec',container,'psql','-X','-qAt','-v','ON_ERROR_STOP=1','-U','life_admin','-d',database,'-c',query], capture_output=True, check=True, text=True).stdout
+        sql('CREATE DATABASE ' + db)
+        try:
+            with path.open('rb') as source:
+                subprocess.run(['docker','exec','-i',container,'pg_restore','-U','life_admin','-d',db,'--no-owner','--no-acl','--exit-on-error'], stdin=source, capture_output=True, check=True)
+            result = json.loads(sql("SELECT json_build_object('schema', (SELECT max(version) FROM life_migrations), 'events', (SELECT count(*) FROM life_events), 'jobs', (SELECT count(*) FROM life_jobs), 'outbox', (SELECT count(*) FROM life_outbox))", db))
+            if result['schema'] not in (2,3,4,5,6,7,8,9):
+                raise ValueError('unsupported_schema')
+            if result['schema'] >= 3:
+                result.update(json.loads(sql("SELECT json_build_object('memories',(SELECT count(*) FROM life_memories),'memoryRevisions',(SELECT count(*) FROM life_memory_revisions),'memoryEvidence',(SELECT count(*) FROM life_memory_evidence),'memoryLinks',(SELECT count(*) FROM life_memory_links))",db)))
+            if result['schema'] >= 4:
+                result.update(json.loads(sql("SELECT json_build_object('people',(SELECT count(*) FROM life_people),'personAliases',(SELECT count(*) FROM life_person_aliases),'conversationPeople',(SELECT count(*) FROM life_conversation_people))",db)))
+            if result['schema'] >= 5:
+                result.update(json.loads(sql("SELECT json_build_object('consolidationTasks',(SELECT count(*) FROM life_memory_tasks),'consolidationCursors',(SELECT count(*) FROM life_memory_cursors),'consolidationCalls',(SELECT count(*) FROM life_memory_calls))",db)))
+            if result['schema'] >= 6:
+                result.update(json.loads(sql("SELECT json_build_object('styleProfiles',(SELECT count(*) FROM life_style_profiles),'styleRules',(SELECT count(*) FROM life_style_rules),'styleEvidence',(SELECT count(*) FROM life_style_evidence),'styleRevisions',(SELECT count(*) FROM life_style_revisions))",db)))
+            if result['schema'] >= 7:
+                result.update(json.loads(sql("SELECT json_build_object('imageLabels',(SELECT count(*) FROM life_image_labels),'memes',(SELECT count(*) FROM life_memes))",db)))
+            if result['schema'] >= 8:
+                result.update(json.loads(sql("SELECT json_build_object('habits',(SELECT count(*) FROM life_habits),'habitRevisions',(SELECT count(*) FROM life_habit_revisions),'habitOperations',(SELECT count(*) FROM life_habit_ops))",db)))
+            if result['schema'] >= 9:
+                result.update(json.loads(sql("SELECT json_build_object('attentionAliases',(SELECT count(*) FROM life_attention_aliases),'attentionEvidence',(SELECT count(*) FROM life_attention_evidence),'attentionRevisions',(SELECT count(*) FROM life_attention_revisions))",db)))
+            print(json.dumps({'restoredInIsolatedDatabase': True, 'validation': result}))
+        finally:
+            sql('DROP DATABASE ' + db + ' WITH (FORCE)')
+    else:
+        raise ValueError('Usage: scripts/life-db {start|stop|restart|status|backup|verify-backup FILE}')
+except (OSError, ValueError, subprocess.CalledProcessError, IndexError):
+    print(json.dumps({'error': 'life_database_command_failed', 'command': command}), file=sys.stderr)
+    sys.exit(1)

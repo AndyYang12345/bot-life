@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+umask 077
+mkdir -p "$TASK_ROOT/data/attention"
+ATTENTION_ENV=venv
+ATTENTION_REQUIREMENTS=requirements.lock
+if [ "${1:-}" = --gpu ]; then
+  ATTENTION_ENV=venv-gpu
+  ATTENTION_REQUIREMENTS=requirements-gpu.lock
+fi
+python3 -m venv "$TASK_ROOT/data/attention/$ATTENTION_ENV"
+"$TASK_ROOT/data/attention/$ATTENTION_ENV/bin/python" -m pip install -r "$TASK_ROOT/attention_backend/$ATTENTION_REQUIREMENTS"
+HF_HUB_DISABLE_TELEMETRY=1 "$TASK_ROOT/data/attention/$ATTENTION_ENV/bin/python" "$TASK_ROOT/attention_backend/server.py" --cache-dir "$TASK_ROOT/data/attention/models" --download

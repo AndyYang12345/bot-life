@@ -1,0 +1,16 @@
+[Unit]
+Description=DSH OneBot adapter with Life Core ledger
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/ABSOLUTE/WORKSPACE/workspace
+ExecStart=/ABSOLUTE/WORKSPACE/scripts/run-onebot
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=default.target

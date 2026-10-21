@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Build both packages and run unit + actual isolated PostgreSQL acceptance."""
+import os
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(__file__).resolve().parents[1]
+env = dict(os.environ)
+config = root/'data/config/life-db-admin.json'
+if not config.exists():
+    sys.exit('Run scripts/init-life, start the isolated database, and migrate it before checking the full project.')
+env['LIFE_TEST_ADMIN_CONFIG']=str(config)
+for package,commands in [('life-core',('check','build','test')),('dsh-onebot',('check','build','test'))]:
+    for command in commands:
+        subprocess.run(['pnpm',command],cwd=root/package,env=env,check=True)
+subprocess.run([sys.executable,'-m','unittest','desktop_app.test_runtime'],cwd=root,check=True)
+subprocess.run([sys.executable,'-m','unittest','discover','-s','attention_backend','-p','test_*.py'],cwd=root,check=True)
+bili_python=root/'data/bilibili/venv/bin/python'
+if bili_python.exists():
+    subprocess.run([str(bili_python),'-m','unittest','discover','-s','bilibili','-p','test_*.py'],cwd=root,check=True)
+else:
+    print('Bilibili optional backend tests not run: run scripts/setup-bilibili to install its runtime.')
+print('Full project checks passed, including real PostgreSQL acceptance and desktop launcher contracts.')

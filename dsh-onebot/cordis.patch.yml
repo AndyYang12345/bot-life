@@ -1,0 +1,4 @@
+- insert:
+    - id: im-onebot
+      name: '@local/dsh-onebot'
+      config: {}

@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$TASK_ROOT/deploy"
+TASK_ACTION=${1:-status}
+set -- docker compose -f "$TASK_ROOT/deploy/compose.yaml"
+if [ -e "$TASK_ROOT/data/config/qq-login.md5" ] || [ -L "$TASK_ROOT/data/config/qq-login.md5" ]; then
+    case "$TASK_ACTION" in
+      start|apply-login|restart) "$TASK_ROOT/scripts/qq-login-password" check ;;
+    esac
+    set -- "$@" -f "$TASK_ROOT/deploy/login-password.yaml"
+fi
+case "$TASK_ACTION" in
+  start) "$@" up -d ;;
+  apply-login) "$@" up -d --force-recreate ;;
+  stop) "$@" stop ;;
+  restart) "$@" restart ;;
+  status) "$@" ps ;;
+  logs)
+    echo 'Logs may contain login URLs or tokens. View locally; do not paste them into chat.' >&2
+    "$@" logs --tail=100 ;;
+  *) echo 'Usage: scripts/napcat {start|apply-login|stop|restart|status|logs}' >&2; exit 2 ;;
+esac

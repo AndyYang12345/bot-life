@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec node "$TASK_ROOT/life-core/dist/admin.js" "$@" --config "$TASK_ROOT/data/config/life-db-admin.json"

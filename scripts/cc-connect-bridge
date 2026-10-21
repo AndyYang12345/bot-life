@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+TASK_UID=$(id -u)
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$TASK_UID}
+export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
+case "${1:-status}" in
+  pause) systemctl --user stop cc-connect.service ;;
+  resume) systemctl --user start cc-connect.service ;;
+  status) systemctl --user show cc-connect.service -p ActiveState -p SubState -p MainPID ;;
+  *) echo 'Usage: scripts/cc-connect-bridge {pause|resume|status}' >&2; exit 2 ;;
+esac

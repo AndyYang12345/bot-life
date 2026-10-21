@@ -1,0 +1,42 @@
+# Runtime data, credentials, chats, downloads, upstream checkouts and local profiles
+/data/
+/repos/
+/downloads/
+/evidence/
+/workspace/
+/backups/
+/exports/
+/deploy/.env
+/.env
+**/.env.local
+**/node_modules/
+**/dist/
+**/coverage/
+**/__pycache__/
+*.pyc
+*.log
+*.tmp
+*.dump
+*.tar
+*.zip
+# Secrets belong in the ignored data/config directory, never in examples
+*.pem
+*.key
+
+# Public archive: ignore any additional local credentials and media
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+*.mp4
+*.mp3
+*.wav
+*.jpg
+*.jpeg
+*.png
+*.webp
+.gitleaks-report*.json

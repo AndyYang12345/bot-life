@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Wait for an authenticated, online OneBot account without attempting QQ logins."""
+import argparse
+import datetime
+import json
+import os
+import pathlib
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--policy', default=os.environ.get('ONEBOT_POLICY'))
+parser.add_argument('--once', action='store_true')
+parser.add_argument('--interval-ms', type=int, default=2000)
+args = parser.parse_args()
+try:
+    policy = json.loads(pathlib.Path(args.policy).read_text())
+    url = urllib.parse.urlparse(policy['httpUrl'])
+    if url.scheme != 'http' or url.hostname not in ('127.0.0.1','localhost','::1') or url.username or url.password or url.query:
+        raise ValueError('unsafe_endpoint')
+    config = json.loads(pathlib.Path(policy['onebotConfigFile']).read_text())
+    token = next(s['token'] for s in config['network']['httpServers'] if s.get('enable'))
+    if not token:
+        raise ValueError('missing_token')
+    client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+except (OSError,ValueError,KeyError,StopIteration,TypeError):
+    sys.exit('Invalid trusted OneBot startup configuration.')
+
+def api(action):
+    req = urllib.request.Request(policy['httpUrl'].rstrip('/')+'/'+action,data=b'{}',headers={'Content-Type':'application/json','Authorization':'Bearer '+token})
+    with client.open(req,timeout=3) as response:
+        return json.load(response)
+
+previous = None
+while True:
+    fatal = False
+    try:
+        status = api('get_status')
+        online = status.get('retcode') == 0 and status.get('data',{}).get('online') is True
+        state = 'waiting_qq_login'
+        if online:
+            me = api('get_login_info')
+            actual = str(me.get('data',{}).get('user_id',''))
+            expected = str(policy.get('expectedSelfId',''))
+            if me.get('retcode') != 0 or not actual:
+                state = 'waiting_account'
+            elif expected and actual != expected:
+                state, fatal = 'account_mismatch', True
+            else:
+                state = 'ready'
+    except urllib.error.HTTPError as e:
+        state = 'authentication_rejected' if e.code in (401,403) else 'waiting_service'
+        fatal = e.code in (401,403)
+    except (OSError,ValueError,KeyError):
+        state = 'waiting_service'
+    result = {'state':state,'updatedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    directory = pathlib.Path(policy['stateDir'])
+    directory.mkdir(mode=0o700,parents=True,exist_ok=True)
+    path = directory/'readiness.json'
+    path.write_text(json.dumps(result));path.chmod(0o600)
+    if previous != state:
+        print(json.dumps(result),flush=True);previous=state
+    if state == 'ready':sys.exit(0)
+    if fatal:sys.exit(2)
+    if args.once:sys.exit(1)
+    time.sleep(max(args.interval_ms,20)/1000)

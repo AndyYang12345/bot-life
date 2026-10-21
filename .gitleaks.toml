@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact synthetic URL token used by the SSRF rejection test; not a credential"
+regexTarget = "secret"
+regexes = ['''^PRIVATE_SECRET_123$''']

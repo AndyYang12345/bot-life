@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""One-time, explicitly authorized two-message functional probe."""
+import asyncio
+import datetime
+import fcntl
+import json
+import os
+import time
+import urllib.request
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from websockets.legacy.client import connect
+
+ROOT = Path(__file__).resolve().parents[1]
+PLAN = ROOT / "data/config/test-target.json"
+REPORT = ROOT / "evidence/functional-test.json"
+TEXTS = ["NapCat 连通测试", "NapCat 后台发送测试"]
+QUIET_SECONDS = 330
+
+
+def stamp():
+    return datetime.datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()
+
+
+async def main():
+    lock = (ROOT / "data/functional-test.lock").open("w")
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    plan = json.loads(PLAN.read_text())
+    assert plan.get("send_authorized") is True
+    assert not plan.get("consumed"), "This two-message authorization has already been consumed."
+    assert plan.get("allowed_messages") == TEXTS
+    if REPORT.exists():
+        raise RuntimeError("Existing probe report: refusing to resend the authorized messages.")
+    config = json.loads((ROOT / "data/config/onebot11.json").read_text())
+    http_token = config["network"]["httpServers"][0]["token"]
+    ws_token = config["network"]["websocketServers"][0]["token"]
+    group_id = int(plan["group_id"])
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    state = {
+        "started_at": stamp(), "group_name": plan["group_name"],
+        "quiet_threshold_seconds": QUIET_SECONDS, "phase": "starting",
+        "outbound": [], "inbound": [], "websocket_status_confirmed": False,
+        "platform_acceptance_is_not_recipient_confirmation": True,
+    }
+
+    def save():
+        temp = REPORT.with_suffix(".tmp")
+        temp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        temp.chmod(0o600)
+        os.replace(temp, REPORT)
+
+    def api(action, arguments):
+        req = urllib.request.Request(
+            "http://127.0.0.1:3000/" + action,
+            data=json.dumps(arguments).encode(),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + http_token},
+        )
+        with opener.open(req, timeout=10) as response:
+            body = json.load(response)
+        if body.get("retcode") != 0:
+            raise RuntimeError("OneBot action rejected: " + action)
+        return body.get("data") or {}
+
+    save()
+    last_activity = time.monotonic()
+    started = last_activity
+    status_event = asyncio.Event()
+    async with connect(
+        "ws://127.0.0.1:3001/", extra_headers={"Authorization": "Bearer " + ws_token},
+        open_timeout=8, ping_interval=20, ping_timeout=20,
+    ) as socket:
+        self_id = str((await asyncio.to_thread(api, "get_login_info", {}))["user_id"])
+
+        async def receive():
+            nonlocal last_activity
+            async for raw in socket:
+                event = json.loads(raw)
+                if event.get("echo") == "local-functional-probe":
+                    state["websocket_status_confirmed"] = event.get("retcode") == 0
+                    status_event.set()
+                    save()
+                    continue
+                if event.get("post_type") not in ("message", "message_sent"):
+                    continue
+                if str(event.get("group_id")) != str(group_id):
+                    continue
+                if str(event.get("user_id")) == self_id:
+                    continue
+                last_activity = time.monotonic()
+                segments = event.get("message") if isinstance(event.get("message"), list) else []
+                item = {
+                    "received_at": stamp(), "segment_types": [s.get("type") for s in segments],
+                    "image_payload_available": any(s.get("type") == "image" and bool((s.get("data") or {}).get("url") or (s.get("data") or {}).get("file")) for s in segments),
+                }
+                for segment in segments:
+                    if segment.get("type") == "reply":
+                        try:
+                            referenced = await asyncio.to_thread(api, "get_msg", {"message_id": segment["data"]["id"]})
+                            item["referenced_message_resolved"] = bool(referenced.get("message"))
+                        except Exception:
+                            item["referenced_message_resolved"] = False
+                state["inbound"].append(item)
+                save()
+                print(json.dumps({"event": "test_group_message_received", **item}, ensure_ascii=False), flush=True)
+
+        reader = asyncio.create_task(receive())
+        await socket.send(json.dumps({"action": "get_status", "params": {}, "echo": "local-functional-probe"}))
+        await asyncio.wait_for(status_event.wait(), timeout=8)
+        assert state["websocket_status_confirmed"]
+        print("WebSocket authenticated and read-only status action verified; receiver is ready.", flush=True)
+
+        async def send(index, quiet_duration=None):
+            record = {"index": index + 1, "text": TEXTS[index], "started_at": stamp(), "status": "dispatching"}
+            if quiet_duration is not None:
+                record["continuous_quiet_seconds"] = round(quiet_duration, 2)
+            state["outbound"].append(record)
+            save()
+            try:
+                response = await asyncio.to_thread(api, "send_group_msg", {"group_id": group_id, "message": TEXTS[index], "auto_escape": True})
+                record.update(status="api_accepted", message_id=response.get("message_id"), accepted_at=stamp())
+            except Exception:
+                record["status"] = "unknown_or_failed_no_retry"
+                save()
+                raise
+            save()
+            print(json.dumps({"event": "authorized_message_api_accepted", "index": index + 1}, ensure_ascii=False), flush=True)
+
+        await send(0)
+        last_activity = time.monotonic()
+        state["phase"] = "waiting_for_quiet"
+        save()
+        while time.monotonic() - started < 900:
+            if reader.done():
+                await reader
+                raise RuntimeError("WebSocket closed before test completion.")
+            quiet_duration = time.monotonic() - last_activity
+            if quiet_duration >= QUIET_SECONDS:
+                await send(1, quiet_duration)
+                state.update(phase="completed", completed_at=stamp())
+                save()
+                print("Two-message probe completed; no further sends will occur.", flush=True)
+                break
+            await asyncio.sleep(1)
+        else:
+            state["phase"] = "quiet_window_not_reached"
+            save()
+            print("Quiet window was not reached within 15 minutes; second message was not sent.", flush=True)
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

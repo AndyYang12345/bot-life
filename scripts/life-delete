@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Offline, explicit-conversation deletion for the OneBot channel's local data."""
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import uuid
+
+root = pathlib.Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser()
+selection = parser.add_mutually_exclusive_group(required=True)
+selection.add_argument('--conversation', help='Exact onebot:account:scope:peer key')
+selection.add_argument('--resume', help='Resume local cleanup from a deletion manifest')
+args = parser.parse_args()
+env = dict(os.environ, XDG_RUNTIME_DIR='/run/user/' + str(os.getuid()), DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/' + str(os.getuid()) + '/bus')
+try:
+    if bool(args.conversation) == bool(args.resume):
+        raise ValueError('choose_scope_or_resume')
+    state = subprocess.run(['systemctl','--user','show','napcat-onebot.service','-p','ActiveState','--value'], env=env, capture_output=True, text=True, check=True).stdout.strip()
+    if state not in ('inactive','failed'):
+        raise ValueError('stop_adapter_before_delete')
+    memory_state = subprocess.run(['systemctl','--user','show','napcat-memory.service','-p','ActiveState','--value'], env=env, capture_output=True, text=True).stdout.strip()
+    if memory_state not in ('inactive','failed'):
+        raise ValueError('stop_memory_worker_before_delete')
+    with contextlib.ExitStack() as locks:
+        for lock_path in ('data/dsh-home/onebot.lock','data/adapter/consolidation.lock'):
+            lock = locks.enter_context((root / lock_path).open('a'))
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        manifests = root / 'data/deletions'
+        manifests.mkdir(mode=0o700, exist_ok=True)
+        if args.resume:
+            manifest = pathlib.Path(args.resume).resolve()
+            if not manifest.is_relative_to(manifests.resolve()):
+                raise ValueError('manifest_outside_deletion_directory')
+            plan = json.loads(manifest.read_text())
+            scope = subprocess.run([str(root/'scripts/life-admin'),'scope-status','--conversation',plan['conversation']], capture_output=True, text=True, check=True)
+            if json.loads(scope.stdout)['events'] != 0:
+                raise ValueError('database_deletion_not_committed')
+        else:
+            if not args.conversation.startswith('onebot:') or len(args.conversation.split(':')) != 4:
+                raise ValueError('explicit_onebot_scope_required')
+            manifest = manifests / (str(uuid.uuid4()) + '.json')
+            result = subprocess.run([str(root/'scripts/life-admin'),'delete','--conversation',args.conversation,'--manifest',str(manifest)], capture_output=True, text=True, check=True)
+            plan = json.loads(result.stdout)
+        media_root = (root/'workspace/media').resolve()
+        (root/'data/adapter/attention'/(hashlib.sha256(plan['conversation'].encode()).hexdigest()+'.json')).unlink(missing_ok=True)
+        # Copies are isolated by a hash of the exact deleted scope, even when
+        # another group references the same original blob.
+        meme_folder = media_root/'memes'/hashlib.sha256(plan['conversation'].encode()).hexdigest()
+        if not meme_folder.is_symlink() and meme_folder.resolve().is_relative_to(media_root):
+            shutil.rmtree(meme_folder, ignore_errors=True)
+        for raw in plan['orphanPaths']:
+            path = pathlib.Path(raw)
+            if not path.is_symlink() and path.resolve().is_relative_to(media_root) and path.name.split('.')[0].isalnum():
+                path.unlink(missing_ok=True)
+        for folder in ('inbox-spool','event-spool'):
+            for path in (root/'data/adapter'/folder).glob('*.json'):
+                if json.loads(path.read_text()).get('value',{}).get('conversation') == plan['conversation']:
+                    path.unlink()
+        home = root/'data/dsh-home'
+        for session in plan['sessions']:
+            uuid.UUID(session)
+            for project in (home/'sessions').glob('*'):
+                target = project/session
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+            (home/'storages/session_projcache/sessions'/(session+'.json')).unlink(missing_ok=True)
+        # DSH's provider/attachment caches currently lack a per-conversation GC API.
+        # Purge shared copies only when this isolated instance has no remaining scope.
+        if plan['remainingScopes'] == 0:
+            for path in media_root.glob('*'):
+                if path.is_file() and not path.is_symlink():
+                    path.unlink()
+            for path in (home/'attachments', home/'cache/attachments'):
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+            (home/'llm-deepseek/files-v3.json').unlink(missing_ok=True)
+        legacy = root/'data/adapter/adapter-state.json'
+        if legacy.exists():
+            data = json.loads(legacy.read_text())
+            data.get('sessions',{}).pop(plan['conversation'].removeprefix('onebot:'),None)
+            legacy.write_text(json.dumps(data)); legacy.chmod(0o600)
+        plan['phase'] = 'local_cleanup_complete'
+        manifest.write_text(json.dumps(plan,indent=2)); manifest.chmod(0o600)
+        print(json.dumps({'deletedEvents':plan['deletedEvents'],'sessionsRemoved':len(plan['sessions']),'manifest':str(manifest),'sharedDshCachesRetained':plan['remainingScopes']>0,'paused':True}))
+except (ValueError, OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+    print(json.dumps({'error':'life_delete_failed','hint':'Keep adapter stopped; inspect data/deletions locally before retrying.'}),file=sys.stderr)
+    sys.exit(1)

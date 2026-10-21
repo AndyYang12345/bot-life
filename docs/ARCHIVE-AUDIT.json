@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-21",
+  "scope": "public main snapshot",
+  "history": "new sanitized history; original repository objects excluded",
+  "known_private_values_checked": 9,
+  "private_identifiers_checked": 9,
+  "known_private_values_or_identifiers_found": 0,
+  "gitleaks": {
+    "version": "8.30.1",
+    "findings_after_review": 0,
+    "reviewed_exception": "exact synthetic test token PRIVATE_SECRET_123; default rules retained"
+  },
+  "verification": {
+    "typescript_builds": "both passed",
+    "life_core_tests_passed": 145,
+    "onebot_tests_passed": 94,
+    "onebot_tests_skipped": 1,
+    "skip_reason": "optional real ONNX test runtime/weights absent in public snapshot",
+    "python_tests_passed": 30,
+    "postgresql": "real isolated test databases; no production database cleared",
+    "qq_or_model_api_retested": false
+  },
+  "excluded": [
+    "runtime credentials and account/group identifiers",
+    "chat history, media, database and backups",
+    "upstream source, model weights and generated dependencies",
+    "original Git history and commit author email"
+  ]
+}

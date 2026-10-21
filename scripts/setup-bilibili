@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+umask 077
+mkdir -p "$TASK_ROOT/data/bilibili"
+python3 -m venv "$TASK_ROOT/data/bilibili/venv"
+"$TASK_ROOT/data/bilibili/venv/bin/python" -m pip install -r "$TASK_ROOT/bilibili/requirements.lock"

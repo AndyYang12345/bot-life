@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+TASK_UID=$(id -u)
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$TASK_UID}
+export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
+TASK_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+case "${1:-status}" in
+  start|stop|restart) systemctl --user "$1" napcat-onebot.service ;;
+  status)
+    systemctl --user show napcat-onebot.service -p ActiveState -p SubState -p MainPID
+    python3 -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); print(json.dumps({"startupReadiness":json.loads(p.read_text())},ensure_ascii=False,indent=2)) if p.exists() else None' "$TASK_ROOT/data/adapter/readiness.json"
+    python3 -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); print(json.dumps(json.loads(p.read_text()),ensure_ascii=False,indent=2)) if p.exists() else None' "$TASK_ROOT/data/adapter/health.json"
+    ;;
+  *) echo 'Usage: scripts/onebot-adapter {start|stop|restart|status}' >&2; exit 2 ;;
+esac

@@ -1,0 +1,12 @@
+{
+  "enabled": false,
+  "policyFile": "/ABSOLUTE/WORKSPACE/data/config/adapter.json",
+  "healthFile": "/ABSOLUTE/WORKSPACE/data/adapter/consolidation-health.json",
+  "pollMs": 30000,
+  "minMessages": 3,
+  "maxMessages": 12,
+  "maxAgeMs": 300000,
+  "maxPerHour": 2,
+  "maxPerDay": 12,
+  "maxOutputTokens": 1500
+}
